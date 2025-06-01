@@ -1,7 +1,7 @@
 # Synchrobike
-Synchronized LED color palletes and animations.
+Synchronized LED color palettes and animations.
 
-The goal of this project is to synchronize amazing LED animations and colors across a wiresless node mesh.
+The goal of this project is to synchronize amazing LED animations and colors across a wireless node mesh.
 
 [Video Preview](https://github.com/jsonpoindexter/synchrobike/blob/7a36adf7c99e19d84d8cd89cc18fcecfbe31a66b/IMG_6202.mov)
 
@@ -14,13 +14,29 @@ The goal of this project is to synchronize amazing LED animations and colors acr
 * [5M Telescopic Fishing Rod](https://www.aliexpress.com/item/AZJ-Brand-Wholesale-2-1-7-2M-Stream-Fishing-Rod-Glass-Fiber-Telescopic-Fishing-Rod-Ultra/32794897069.html)
 
 ## Project Dependencies
-* FastLED (EPS8266 DMA Fork): https://github.com/coryking/FastLED  -*this fixes flickering caused by interupts on the ESP8226 and the WS281x's* 
+* FastLED (ESP8266 DMA Fork): https://github.com/coryking/FastLED  -*this fixes flickering caused by interrupts on the ESP8266 and the WS281x's* 
 
 * ESP8266TrueRandom: https://github.com/marvinroger/ESP8266TrueRandom
 
 * painlessMesh: https://gitlab.com/painlessMesh/painlessMesh
-    * And any painlessMesh dependencies: https://gitlab.com/painlessMesh/painlessMesh#dependencies
+    * Dependencies:
+        * ArduinoJson: https://github.com/bblanchon/ArduinoJson
+        * TaskScheduler: https://github.com/arkhipenko/TaskScheduler
 
+## Changeable Constants
+The following constants in the code can be modified to customize the behavior of the project:
+
+- **`NUM_LEDS`**: The number of LEDs in the WS281x strip. Default is `50`.
+- **`DATA_PIN`**: The GPIO pin connected to the LED strip's data line. Default is `GPIO3 (Rx)`.
+- **`BRIGHTNESS`**: The brightness level of the LEDs (0-255). Default is `255`.
+- **`MESH_PREFIX`**: The Wi-Fi mesh network name. Default is `"synchrobike-fw"`.
+- **`MESH_PASSWORD`**: The password for the Wi-Fi mesh network. Default is `"synchrobike-fw"`.
+- **`MESH_PORT`**: The port used for the mesh network. Default is `5555`.
+- **`REVERSE_ANIMATIONS`**: Whether to reverse LED strip animations. Default is `0` (disabled).
+- **`HOLD_PALETTES_X_TIMES_AS_LONG`**: Duration (in seconds) to hold each color palette. Default is `10`.
+- **`HOLD_ANIMATION_X_TIMES_AS_LONG`**: Duration (in seconds) to hold each animation. Default is `20`.
+
+These constants can be found and modified in the `synchrobike.ino` file under the `src/` directory.
 
 ## Wiring
 | **WS281x**        |   **Wemos D1 Mini**| 
@@ -29,11 +45,10 @@ The goal of this project is to synchronize amazing LED animations and colors acr
 | Ground      | Ground       |
 | 5v / Vcc | 5v       |
 
-
 ## Powering
 Power the Wemos D1 Mini through the micro USB port using a 5v mobile phone battery bank. The peak power usage is around 350-500mA on full brightness (255). 
 
-**Note: It is HIGHLY suggested to unplug the LEDs from the Wemos D1 Mini while uploading the sketch. The LEDs being on the RX pin means that they can possibly interfeer with the upload. During upload all connected LEDs will turn white at max brightness which could possibly cause harm to the Wemos D1 Mini and/or the USB port.**
+**Note: It is HIGHLY suggested to unplug the LEDs from the Wemos D1 Mini while uploading the sketch. The LEDs being on the RX pin means that they can possibly interfere with the upload. During upload, all connected LEDs will turn white at max brightness, which could possibly cause harm to the Wemos D1 Mini and/or the USB port.**
 
 ## Range 
 I was able to successfully sync two nodes at a distance of 180m before running out of line of sight.
