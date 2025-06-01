@@ -1,3 +1,8 @@
+# Fork Changes
+
+* The coryking/FastLED library was not being loaded. When fixed, there was a type incompatibility between FastLED and working versions of Arduino.h. I had to fork coryking/FastLED to correct this. This fork now loads that fork.
+* upload.py had some MacOS-specific code. I made it work on Windows.
+
 # Synchrobike
 Synchronized LED color palettes and animations.
 
