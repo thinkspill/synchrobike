@@ -1,23 +1,42 @@
 import asyncio
-import iterm2
 import os
 import subprocess
 import platform
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 import time
+import configparser
+
+if platform.system() == "Darwin":  # Only import iterm2 on macOS
+    import iterm2
 
 # Define the iTerm2 window title variable name
 ITERM2_HOST_WINDOW_VAR = "ESP Serial Monitor Window"
+
+def get_upload_port():
+    """
+    Read the upload_port setting from platformio.ini.
+    """
+    config = configparser.ConfigParser()
+    config.read("platformio.ini")
+    try:
+        return config["env:d1_mini"]["upload_port"]
+    except KeyError:
+        return None
 
 async def list_serial_ports():
     """
     List all available serial ports, filtering for specific devices.
     """
+    upload_port = get_upload_port()
+    if upload_port:
+        # If upload_port is specified in platformio.ini, use it
+        return [upload_port]
+
     system_platform = platform.system()
     if system_platform == "Windows":
         available_ports = ['COM{}'.format(i + 1) for i in range(256)]
-        return [port for port in available_ports if check_port_exists(port)]
+        return [port for port in available_ports if port != 'COM1' and check_port_exists(port)]
     elif system_platform == "Darwin":
         # Only list 'tty.usbserial' ports for macOS (Darwin)
         available_ports = [port for port in os.listdir('/dev/') if 'tty.usbserial' in port]
@@ -72,6 +91,63 @@ def upload_firmware(port, env, verbose=False):
     else:
         print(f"Failed to upload firmware to device on port {port}.\nError: {result.stderr.decode()}")
 
+if platform.system() == "Darwin":
+    # iTerm2-specific code here
+    async def manage_monitoring_panes(connection, ports, split_direction):
+        # iTerm2 pane management logic
+        window = await create_or_reuse_iterm2_window(connection)
+
+        # Create a mapping of sessions for currently connected ports
+        session_port_map = {}
+        for tab in window.tabs:
+            for session in tab.sessions:
+                # Retrieve the custom variable for the session
+                port = await session.async_get_variable("monitor_port")
+                if port:
+                    session_port_map[port] = session
+
+        # Iterate over currently connected ports and manage sessions
+        for port in ports:
+            if port in session_port_map:
+                # Reuse existing session for this port
+                session = session_port_map[port]
+                # Send the serial monitor command again to resume monitoring
+                await session.async_send_text(f"pio device monitor --port {port} --baud 115200\n")
+                del session_port_map[port]  # Remove from the map, as it's still valid
+            else:
+                # Create a new pane for new ports
+                if window.current_tab:
+                    current_session = window.current_tab.current_session
+                    new_session = await current_session.async_split_pane(vertical=(split_direction == "vertical"))
+                    await new_session.async_set_variable(   "user.monitor_port", port)  # Set the custom variable to identify the session
+                    await new_session.async_send_text(f"pio device monitor --port {port} --baud 115200\n")
+
+        # Close sessions that no longer have corresponding ports connected
+        for session in session_port_map.values():
+            await session.async_close()
+else:
+    # Provide a placeholder or skip functionality for non-macOS systems
+    async def manage_monitoring_panes(connection, ports, split_direction):
+        print("iTerm2 integration is not supported on this platform.")
+
+if platform.system() == "Darwin":
+    async def stop_monitoring_for_existing_panes(connection):
+        """
+        Send CTRL-C to existing panes in the dedicated iTerm2 window to stop current monitoring.
+        """
+        window = await get_iterm2_window(connection)
+        if window:
+            for tab in window.tabs:
+                for session in tab.sessions:
+                    # send CTRL+C to stop the serial monitor
+                    await session.async_send_text("\x03")
+else:
+    async def stop_monitoring_for_existing_panes(connection):
+        """
+        Placeholder for non-macOS systems.
+        """
+        print("Skipping stop_monitoring_for_existing_panes on non-macOS platforms.")
+
 async def get_iterm2_window(connection):
     """
     Get the dedicated iTerm2 window for monitoring.
@@ -99,17 +175,6 @@ async def create_or_reuse_iterm2_window(connection):
         await window.async_set_variable("user.monitor_window", ITERM2_HOST_WINDOW_VAR)
     return window
 
-async def stop_monitoring_for_existing_panes(connection):
-    """
-    Send CTRL-C to existing panes in the dedicated iTerm2 window to stop current monitoring.
-    """
-    window = await get_iterm2_window(connection)
-    if window:
-        for tab in window.tabs:
-            for session in tab.sessions:
-                # send CTRL+C to stop the serial monitor
-                await session.async_send_text("\x03")
-
 async def close_disconnected_sessions(connection, current_ports):
     """
     Close sessions in iTerm2 that are no longer associated with a connected port.
@@ -123,41 +188,6 @@ async def close_disconnected_sessions(connection, current_ports):
                 if port and port not in current_ports:
                     # Close sessions that are no longer connected
                     await session.async_close()
-
-async def manage_monitoring_panes(connection, ports, split_direction="vertical"):
-    """
-    Manage monitoring panes: reuse existing ones for the same ports, remove those for disconnected ports, and add new ones for newly connected ports.
-    """
-    window = await create_or_reuse_iterm2_window(connection)
-
-    # Create a mapping of sessions for currently connected ports
-    session_port_map = {}
-    for tab in window.tabs:
-        for session in tab.sessions:
-            # Retrieve the custom variable for the session
-            port = await session.async_get_variable("monitor_port")
-            if port:
-                session_port_map[port] = session
-
-    # Iterate over currently connected ports and manage sessions
-    for port in ports:
-        if port in session_port_map:
-            # Reuse existing session for this port
-            session = session_port_map[port]
-            # Send the serial monitor command again to resume monitoring
-            await session.async_send_text(f"pio device monitor --port {port} --baud 115200\n")
-            del session_port_map[port]  # Remove from the map, as it's still valid
-        else:
-            # Create a new pane for new ports
-            if window.current_tab:
-                current_session = window.current_tab.current_session
-                new_session = await current_session.async_split_pane(vertical=(split_direction == "vertical"))
-                await new_session.async_set_variable(   "user.monitor_port", port)  # Set the custom variable to identify the session
-                await new_session.async_send_text(f"pio device monitor --port {port} --baud 115200\n")
-
-    # Close sessions that no longer have corresponding ports connected
-    for session in session_port_map.values():
-        await session.async_close()
 
 async def main(connection):
     # Parse command-line arguments
@@ -200,4 +230,8 @@ async def main(connection):
         await manage_monitoring_panes(connection, ports, args.split)
 
 if __name__ == "__main__":
-    iterm2.run_until_complete(main)
+    if platform.system() == "Darwin":
+        iterm2.run_until_complete(main)
+    else:
+        # Run the script without iTerm2 integration
+        asyncio.run(main(None))  # Pass `None` as the `connection` argument

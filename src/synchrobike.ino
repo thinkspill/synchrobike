@@ -1,53 +1,40 @@
 #include <I2S.h>
-
 #include "painlessMesh.h"
 
-#define   MESH_PREFIX     "synchrobike-fw"
-#define   MESH_PASSWORD   "synchrobike-fw"
-#define   MESH_PORT       5555
+// Mesh network configuration
+#define   MESH_PREFIX     "synchrobike-fw"  // Mesh network name
+#define   MESH_PASSWORD   "synchrobike-fw"  // Mesh network password
+#define   MESH_PORT       5555              // Mesh network port
 
-painlessMesh  mesh;
+painlessMesh  mesh;  // Mesh network object
 
 #include <string>
 #include <sstream>
 #include <iomanip>
-String formatUniqueMacAddress(uint64_t mac) {
-    String macStr;
-    macStr.reserve(17); // Reserving space for "XX:XX:XX"
 
-    for (int i = 2; i >= 0; --i) {
-        if (i < 2) {
-            macStr += ":";
-        }
-        macStr += String((mac >> (i * 8)) & 0xFF, HEX);
-    }
-    macStr.toUpperCase();
-    return macStr;
-}
+char uniqueHostname[18]; // Fixed-size character array for "XX:XX:XX"
 
-String uniqueHostname = formatUniqueMacAddress(ESP.getChipId());
+#include <ESP8266TrueRandom.h>  // Library for generating random numbers on ESP8266
 
-
-#include <ESP8266TrueRandom.h>
-
-#define FASTLED_ESP8266_DMA // Use ESP8266'a DMA (GPIO3 / Commonly RX)
-                            // WS281x LEDs must be unplugged while uploading sketch
+// FastLED configuration
+#define FASTLED_ESP8266_DMA // Use ESP8266's DMA for WS281x LEDs
 #include<FastLED.h>
 
 #if FASTLED_VERSION < 3001000
 #error "Requires FastLED 3.1 or later; check github for latest code."
 #endif
 
-#define LED_PIN     3 // This pin is ignorred when using FASTLED_ESP8266_DMA
-#define NUM_LEDS    50
-#define BRIGHTNESS  255 // Range 0 - 255
-#define LED_TYPE    WS2811
-#define COLOR_ORDER GRB
-CRGB leds[NUM_LEDS];
+#define LED_PIN     3 // GPIO pin for LED data (ignored with DMA)
+#define NUM_LEDS    50 // Number of LEDs in the strip
+#define BRIGHTNESS  255 // LED brightness (0-255)
+#define LED_TYPE    WS2811 // LED type
+#define COLOR_ORDER GRB // Color order for the LEDs
+CRGB leds[NUM_LEDS]; // Array to hold LED colors
 
 // Reverse LED strip animations
-#define REVERSE_ANIMATIONS 0
+#define REVERSE_ANIMATIONS 0 // Set to 1 to reverse animations
 
+// Function to get the LED index, considering reverse animations
 inline int ledIndex(int i) {
 #if REVERSE_ANIMATIONS
     return NUM_LEDS - 1 - i;
@@ -56,118 +43,142 @@ inline int ledIndex(int i) {
 #endif
 }
 
-#define HOLD_PALETTES_X_TIMES_AS_LONG 10 // Seconds
+// Animation and palette timing configuration
+#define HOLD_PALETTES_X_TIMES_AS_LONG 10 // Seconds to hold each color palette
+#define HOLD_ANIMATION_X_TIMES_AS_LONG 20 // Seconds to hold each animation
 
-#define HOLD_ANIMATION_X_TIMES_AS_LONG 20 // Seconds
+// Palette and blending configuration
+CRGBPalette16 currentPalette(CRGB::Black); // Current color palette
+CRGBPalette16 targetPalette(OceanColors_p); // Target color palette
+TBlendType    currentBlending;  // Blending type (NOBLEND or LINEARBLEND)
 
+// Noise animation variables
+static int16_t dist;  // Random number for noise generator
+uint16_t xscale = 30; // Noise scale for x-axis
+uint16_t yscale = 30; // Noise scale for y-axis
+uint8_t maxChanges = 24; // Blending speed between palettes
 
-CRGBPalette16 currentPalette(CRGB::Black);
-CRGBPalette16 targetPalette(OceanColors_p);
-TBlendType    currentBlending;  // NOBLEND or LINEARBLEND 
-
-static int16_t dist;  // A random number for our noise generator.
-uint16_t xscale = 30;  // Wouldn't recommend changing this on the fly, or the animation will be really blocky.
-uint16_t yscale = 30;  // Wouldn't recommend changing this on the fly, or the animation will be really blocky.
-uint8_t maxChanges = 24;  // Value for blending between palettes.
-
+// Flags for forcing changes
 boolean force_direction_change = false;
 boolean force_pallet_change = false;
 
-uint8_t direction_change; // How many seconds to wait before animation scroll direction to change
+// Variable to track the previous second for palette changes
+uint32_t prev_second = 0;
 
-// Define variables used by the sequences.
-uint8_t  thisfade = 8;                     // How quickly does it fade? Lower = slower fade rate.
-int       thishue = 192;                   // Starting hue.
-uint8_t   thisinc = 2;                     // Incremental value for rotating hues
-uint8_t   thissat = 255;                   // The saturation, where 255 = brilliant colours.
-uint8_t   thisbri = 255;                   // Brightness of a sequence. Remember, max_bright is the overall limiter.
-int       huediff = 256;                   // Range of random #'s to use for hue
+// Variables for animation direction changes
+uint8_t direction_change; // Time to wait before changing animation direction
+uint32_t prev_direction_time = 0; // Variable to track the previous direction change time
+bool direction = true; // Direction flag for animations
 
+// Variables for sequences
+uint8_t  thisfade = 8; // Fade speed
+int       thishue = 192; // Starting hue
+uint8_t   thisinc = 2; // Hue increment
+uint8_t   thissat = 255; // Saturation
+uint8_t   thisbri = 255; // Brightness
+int       huediff = 256; // Hue range
 
+// Firework animation variables
 uint8_t firework_eased   = 0;
 uint8_t firework_count   = 0;
 uint8_t firework_lerpVal = 0;
 
+uint32_t localNodeTime = 0; // Local time in microseconds
+uint32_t lastMillis = 0;    // Last recorded millis() value
 
+// Callback for receiving messages
 void receivedCallback( uint32_t from, String &msg ) {
   Serial.printf("[%s] SYSTEM: Received from %u msg=%s\n", uniqueHostname, from, msg.c_str());
 }
 
+// Callback for new connections
 void newConnectionCallback(uint32_t nodeId) {
     Serial.printf("[%s] SYSTEM: New Connection, nodeId = %u\n", uniqueHostname, nodeId);
 }
 
+// Callback for changed connections
 void changedConnectionCallback() {
     Serial.printf("[%s] SYSTEM: Changed connections %s\n", uniqueHostname, mesh.subConnectionJson().c_str());
 }
 
+// Callback for node time adjustments
 void nodeTimeAdjustedCallback(int32_t offset) {
-    Serial.printf("[%s] SYSTEM: Adjusted time %u. Offset = %d\n", uniqueHostname, mesh.getNodeTime(),offset);
+    Serial.printf("[%s] SYSTEM: Adjusted time %u. Offset = %d\n", uniqueHostname, mesh.getNodeTime(), offset);
+    localNodeTime += offset; // Adjust local time
+    lastMillis = millis();   // Record the current millis()
     force_direction_change = true;
     force_pallet_change = true;
 }
 
+// Setup function
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(74880);
 
-  // all types on
-//mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); 
-  mesh.setDebugMsgTypes( ERROR | STARTUP );  // set before init() so that you can see startup messages
+  // Format the unique MAC address and store it in uniqueHostname
+  uint32_t chipId = ESP.getChipId();
+  snprintf(uniqueHostname, sizeof(uniqueHostname), "%02X:%02X:%02X",
+           (chipId >> 16) & 0xFF, (chipId >> 8) & 0xFF, chipId & 0xFF);
 
+  Serial.printf("Initialized uniqueHostname: %s\n", uniqueHostname);
+
+  // Initialize mesh network
+  // mesh.setDebugMsgTypes( ERROR | STARTUP );  // Debug message types
+  mesh.setDebugMsgTypes( ERROR | MESH_STATUS | CONNECTION | SYNC | COMMUNICATION | GENERAL | MSG_TYPES | REMOTE ); 
   mesh.init( MESH_PREFIX, MESH_PASSWORD, MESH_PORT );
   mesh.onReceive(&receivedCallback);
   mesh.onNewConnection(&newConnectionCallback);
   mesh.onChangedConnections(&changedConnectionCallback);
   mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
   
+  // Initialize FastLED
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection( TypicalLEDStrip );
-  FastLED.setBrightness(  BRIGHTNESS );
-
-  set_max_power_in_volts_and_milliamps(5, 500);               // FastLED Power management set at 5V, 500mA.
+  FastLED.setBrightness( BRIGHTNESS );
+  set_max_power_in_volts_and_milliamps(5, 500); // Power management: 5V, 500mA
   
+  // Seed random number generator
   randomSeed(ESP8266TrueRandom.random());
-  direction_change = random(5,10); // How many seconds to wait before animation scroll direction to change
+  direction_change = random(5,10); // Random time for direction change
   
+  // Initialize target palette with random colors
   targetPalette = CRGBPalette16(CHSV(random(0,255), 255, random(128,255)),
                                 CHSV(random(0,255), 255, random(128,255)),
                                 CHSV(random(0,255), 192, random(128,255)),
                                 CHSV(random(0,255), 255, random(128,255)));
   
-  dist = random16(mesh.getNodeId()); // A semi-random number for our noise generator
-  
+  dist = random16(chipId); // Random number for noise generator
 }
 
+// Main loop
 void loop() {
-  mesh.update();
+  mesh.update(); // Update mesh network
 
+  // // Print free heap memory every 5 seconds
   EVERY_N_MILLISECONDS(5000) {
-    Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Chip ID: %08X\n", ESP.getChipId());
+    // Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
   }
   
+  // // Update LEDs every 15 milliseconds
   EVERY_N_MILLISECONDS(15) {
     showLEDs();
   }
 
+  // // Print current second every second
   EVERY_N_MILLISECONDS(1000) {
-    Serial.printf("[%s] second: %d\n", uniqueHostname.c_str(), getSecond());
+    Serial.printf("[%s] second: %d\n", uniqueHostname, getSecond());
   }
 }
 
-uint32_t prev_second = 0;
-uint32_t prev_millis = 0;
-uint32_t prev_direction_time = 0;
-
-bool direction = rand() % 2;
-
-uint32_t getMillis(){
+// Helper functions for time calculations
+uint32_t getMillis() {
     return (mesh.getNodeTime() / 1000);
 }
 
-uint32_t getSecond(){
+uint32_t getSecond() {
     return (mesh.getNodeTime() / 1000000);
 }
 
-uint32_t getMinute(){
+uint32_t getMinute() {
     return ((mesh.getNodeTime() / 1000000) / 60);
 }
 
@@ -185,24 +196,23 @@ SimplePatternList _animations = {
 // Index of the current animation.
 int _currentAnimation = 0;
 
-// Generate the animation every (ms)
-void showLEDs(){
+// Function to display LED animations
+void showLEDs() {
   int numberOfAnimations = sizeof(_animations) / sizeof(_animations[0]);
   int animation = (getSecond() / HOLD_ANIMATION_X_TIMES_AS_LONG) % numberOfAnimations;
     
-  if (animation != _currentAnimation || force_pallet_change){
+  if (animation != _currentAnimation || force_pallet_change) {
     _currentAnimation = animation;
-    Serial.printf("[%s] animation: %u\n", uniqueHostname.c_str(), _currentAnimation);
+    Serial.printf("[%s] animation: %u\n", uniqueHostname, _currentAnimation);
     
-    // Do any animation-specific reset here.
-    
+    // Reset animation-specific variables
     firework_eased = 0;
     firework_count = 0;
     firework_lerpVal = 0;
   }
 
-  _animations[_currentAnimation]();
-  FastLED.show();
+  _animations[_currentAnimation](); // Call the current animation function
+  FastLED.show(); // Update LEDs
 }
 
 void fillNoise() {
@@ -241,7 +251,7 @@ void changePalette(){
   // change color pallet every random (s)
   uint32_t second = getSecond() / HOLD_PALETTES_X_TIMES_AS_LONG;
   if ((prev_second != second) || force_pallet_change) {
-      Serial.printf("[%s] Change color pallet %u\n", uniqueHostname.c_str(), second);
+      Serial.printf("[%s] Change color pallet %u\n", uniqueHostname, second);
       randomSeed(second);
       targetPalette = CRGBPalette16(
         CHSV(random(0,255), 255, random(128,255)),
@@ -258,7 +268,7 @@ void changePaletteComplementary(){
   // change color pallet every random (s)
   uint32_t second = getSecond() / HOLD_PALETTES_X_TIMES_AS_LONG;
   if ((prev_second != second) || force_pallet_change) {
-    Serial.printf("[%s] Change color pallet %u\n", uniqueHostname.c_str(), second);
+    Serial.printf("[%s] Change color pallet %u\n", uniqueHostname, second);
     randomSeed(second);
 
     // Color picker: https://alloyui.com/examples/color-picker/hsv
@@ -369,6 +379,12 @@ void firework() {
 
   uint8_t index = inoise8(0, dist + firework_lerpVal * yscale) % 255;
   // With that value, look up the 8 bit colour palette value and assign it to the current LED.
+  // Serial.printf("lerpVal %u\n", firework_lerpVal);
+
+  if (firework_lerpVal >= NUM_LEDS) {
+    // Serial.printf("Clamping on %u\n", firework_lerpVal);
+    // firework_lerpVal = NUM_LEDS - 1; // Clamp to the maximum index
+  }
   leds[ledIndex(firework_lerpVal)] = ColorFromPalette(targetPalette, index, 255, LINEARBLEND);
   leds[ledIndex(firework_lerpVal)].maximizeBrightness();
 
@@ -387,7 +403,7 @@ float easeOutQuint(float t) {
 /* = Single firework sent upward with explode ending           = */
 /* ============================================================= */
 float flarePos;
-#define NUM_SPARKS 20 // max number (could be NUM_LEDS / 2);
+#define NUM_SPARKS 25 // max number (could be NUM_LEDS / 2);
 float sparkPos[NUM_SPARKS];
 float sparkVel[NUM_SPARKS];
 float sparkCol[NUM_SPARKS];
@@ -401,24 +417,25 @@ void fireworkWithBang() {
   if (firework_lerpVal != NUM_LEDS) { // Firework going up animation
     firework();
     if (firework_lerpVal == NUM_LEDS) {
-      randomSeed(getSecond());
-      // Init Explosion Vars
-      Serial.println("Init explosions");
-      flarePos = NUM_LEDS - 10;
-      sparkCol[0] = 255; // this will be our known spark
-      nSparks = 20; // works out to look about right
-      c1 = 120;
-      c2 = 50;
-      gravity = -.004; // m/s/s
-      dying_gravity = gravity;
-      // initialize sparks
-      for (int i = 0; i < nSparks; i++) {
-        sparkPos[i] = flarePos;
-        sparkVel[i] = (float(random16(0, 20000)) / 10000.0) - 1.0; // from -1 to 1
-        sparkCol[i] = abs(sparkVel[i]) * 500; // set colors before scaling velocity to keep them bright
-        sparkCol[i] = constrain(sparkCol[i], 0, 255);
-        sparkVel[i] *= flarePos / NUM_LEDS; // proportional to height
-      }
+        randomSeed(getSecond());
+// Init Explosion Vars
+        Serial.println("Init explosions");
+        flarePos = NUM_LEDS - 10;
+        sparkCol[0] = 255; // Initialize the first spark
+        nSparks = NUM_SPARKS; // Set the number of sparks
+        c1 = 120;
+        c2 = 50;
+        gravity = -0.004; // Gravity for sparks
+        dying_gravity = gravity;
+
+        // Initialize sparks
+        for (int i = 0; i < nSparks && i < NUM_SPARKS; i++) {
+            sparkPos[i] = flarePos;
+            sparkVel[i] = (float(random16(0, 20000)) / 10000.0) - 1.0; // from -1 to 1
+            sparkCol[i] = abs(sparkVel[i]) * 500; // set colors before scaling velocity to keep them bright
+            sparkCol[i] = constrain(sparkCol[i], 0, 255);
+            sparkVel[i] *= flarePos / NUM_LEDS; // proportional to height
+        }
     }
   } else { // Firework exploding animation
     explode();
@@ -428,17 +445,17 @@ void fireworkWithBang() {
 void explode() {
   if(sparkCol[0] > c2/128) { // as long as our known spark is lit, work with all the sparks
    FastLED.clear();
-    for (int i = 0; i < nSparks; i++) {
-      sparkPos[i] += sparkVel[i];
-      sparkPos[i] = constrain(sparkPos[i], NUM_LEDS-25, NUM_LEDS);
-      sparkVel[i] += dying_gravity;
-      sparkCol[i] *= .99;
-      leds[ledIndex(int(sparkPos[i]))] = ColorFromPalette(targetPalette, 255 - i, 255, LINEARBLEND);
-      leds[ledIndex(int(sparkPos[i]))].maximizeBrightness();
-      fadeToBlackBy(leds, NUM_LEDS, 32);
-      if (int(sparkPos[i]) == (NUM_LEDS-25)) {
-        leds[ledIndex(int(sparkPos[i]))] = CRGB::Black;
-      }
+    for (int i = 0; i < nSparks && i < NUM_SPARKS; i++) {
+        sparkPos[i] += sparkVel[i];
+        sparkPos[i] = constrain(sparkPos[i], NUM_LEDS - 25, NUM_LEDS);
+        sparkVel[i] += dying_gravity;
+        sparkCol[i] *= 0.99;
+        leds[ledIndex(int(sparkPos[i]))] = ColorFromPalette(targetPalette, 255 - i, 255, LINEARBLEND);
+        leds[ledIndex(int(sparkPos[i]))].maximizeBrightness();
+        fadeToBlackBy(leds, NUM_LEDS, 32);
+        if (int(sparkPos[i]) == (NUM_LEDS - 25)) {
+            leds[ledIndex(int(sparkPos[i]))] = CRGB::Black;
+        }
     }
     dying_gravity *= .995; // as sparks burn out they fall slower
   } else {
@@ -496,6 +513,9 @@ void fireworks() {
         );
       }
       fireworks_count[i] += 1;
+      if (fireworks_lerpVal[i] >= NUM_LEDS) {
+        // fireworks_lerpVal[i] = NUM_LEDS - 1; // Clamp to the maximum index
+      }
       leds[ledIndex(fireworks_lerpVal[i])] = ColorFromPalette(fireworks_pallete[i], index, 255, LINEARBLEND);
       leds[ledIndex(fireworks_lerpVal[i])].maximizeBrightness();
       // Serial.println("LETS GO " + fireworks_lerpVal[i]);
