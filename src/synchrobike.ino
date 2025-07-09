@@ -18,6 +18,8 @@ char uniqueHostname[18]; // Fixed-size character array for "XX:XX:XX"
 
 // FastLED configuration
 #define FASTLED_ESP8266_DMA // Use ESP8266's DMA for WS281x LEDs
+#define FASTLED_ALLOW_INTERRUPTS 0
+#define FASTLED_INTERRUPT_RETRY_COUNT 1
 #include<FastLED.h>
 
 #if FASTLED_VERSION < 3001000
@@ -154,7 +156,7 @@ void loop() {
 
   // // Print free heap memory every 5 seconds
   EVERY_N_MILLISECONDS(5000) {
-    Serial.printf("Chip ID: %08X\n", ESP.getChipId());
+    // Serial.printf("Chip ID: %08X\n", ESP.getChipId());
     // Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
   }
   
@@ -383,7 +385,7 @@ void firework() {
 
   if (firework_lerpVal >= NUM_LEDS) {
     // Serial.printf("Clamping on %u\n", firework_lerpVal);
-    // firework_lerpVal = NUM_LEDS - 1; // Clamp to the maximum index
+    firework_lerpVal = NUM_LEDS - 1; // Clamp to the maximum index
   }
   leds[ledIndex(firework_lerpVal)] = ColorFromPalette(targetPalette, index, 255, LINEARBLEND);
   leds[ledIndex(firework_lerpVal)].maximizeBrightness();
@@ -514,7 +516,7 @@ void fireworks() {
       }
       fireworks_count[i] += 1;
       if (fireworks_lerpVal[i] >= NUM_LEDS) {
-        // fireworks_lerpVal[i] = NUM_LEDS - 1; // Clamp to the maximum index
+        fireworks_lerpVal[i] = NUM_LEDS - 1; // Clamp to the maximum index
       }
       leds[ledIndex(fireworks_lerpVal[i])] = ColorFromPalette(fireworks_pallete[i], index, 255, LINEARBLEND);
       leds[ledIndex(fireworks_lerpVal[i])].maximizeBrightness();
